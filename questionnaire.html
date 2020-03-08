@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8" />
+    <template id="survey">
+        <ul>
+            <li><input id="yes" type="number" min="0" max="10" /><label for="yes">Totalement d'accord</label></li>
+            <li><input id="ok" type="number" min="0" max="10" /><label for="ok">Plutôt d'accord</label></li>
+            <li><input id="nok" type="number" min="0" max="10" /><label for="nok">Plutôt contre</label></li>
+            <li><input id="no" type="number" min="0" max="10" /><label for="no">Totalement contre</label></li>
+            <li><input id="mute" type="number" min="0" max="10" /><label for="mute">Ne se prononce pas</label></li>
+        </ul>
+    </template>
+    <script>
+        const formatter = new Intl.DateTimeFormat("fr", { dateStyle: "short", timeStyle: "short", year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        let download;
+
+        function init() {
+            try {
+                createCheckboxes();
+                createSurveys();
+                openLinks();
+                let responsesString = localStorage.getItem("responses");
+                if (responsesString == null) {
+                    responsesString = JSON.stringify(defaultResponses(), null, 2);
+                }
+                importData(responsesString);
+                updateDownload(responsesString);
+                document.getElementById("importer").addEventListener("change", event => importer(event.target.files));
+                listenReponses();
+            } catch (e) {
+                alert(e);
+            }
+        }
+
+        function openLinks() {
+            for (const a of document.querySelectorAll('a')) {
+                if (a.id != "download") {
+                    a.target = "_blank";
+                }
+            }
+        }
+
+        function createCheckboxes() {
+            const checkboxes = new Set();
+            for (const li of document.querySelectorAll('li[data-checkbox]')) {
+                const id = li.dataset.checkbox;
+                if (checkboxes.has(id)) {
+                    throw `Checkbox "${id}" is already used.`;
+                }
+                checkboxes.add(id);
+                const input = document.createElement("input");
+                input.id = id;
+                input.type = "checkbox";
+                const label = document.createElement("label");
+                label.htmlFor = id;
+                label.innerHTML = li.innerHTML;
+                li.innerHTML = "";
+                li.appendChild(input);
+                li.appendChild(label);
+            }
+        }
+
+        function createSurveys() {
+            const surveys = new Set();
+            const template = document.getElementById("survey");
+            for (const p of document.querySelectorAll('p[data-survey]')) {
+                const prefix = p.dataset.survey + ".";
+                if (surveys.has(prefix)) {
+                    throw `Survey prefix "${prefix}" is already used.`;
+                }
+                surveys.add(prefix);
+                const survey = document.importNode(template.content, true).querySelector("ul");
+                for (const input of survey.querySelectorAll("input")) {
+                    input.id = prefix + input.id;
+                }
+                for (const label of survey.querySelectorAll("label")) {
+                    label.htmlFor = prefix + label.htmlFor;
+                }
+                p.insertAdjacentElement("afterend", survey);
+            }
+        }
+
+        function addField(data, key, value) {
+            let domain = data;
+            const path = key.split(".");
+            for (let i = 0; i < path.length - 1; i++) {
+                if (!domain[path[i]]) {
+                    domain[path[i]] = {};
+                }
+                domain = domain[path[i]];
+            }
+            const name = path[path.length - 1];
+            if (domain[name]) {
+                throw key;
+            }
+            domain[name] = value;
+        }
+
+
+        function defaultResponses() {
+            const data = {};
+            let count = 0;
+            for (let field of document.body.querySelectorAll('input[type="text"]')) {
+                addField(data, field.id, "");
+                count += 1;
+            }
+            for (let field of document.body.querySelectorAll('input[type="url"]')) {
+                addField(data, field.id, "");
+                count += 1;
+            }
+            for (let field of document.body.querySelectorAll('input[type="number"]')) {
+                addField(data, field.id, 0);
+                count += field.id.startsWith("sondage.") ? 0.2 : 1;
+            }
+            for (let field of document.body.querySelectorAll('input[type="checkbox"]')) {
+                addField(data, field.id, false);
+                count += 1;
+            }
+            console.log("Nombre de propositions: " + new Intl.NumberFormat("fr", { maximumFractionDigits: 1 }).format(count));
+            return data;
+        }
+
+        function importer(files) {
+            try {
+                if (files.length != 1) { return; }
+                const file = files.item(0);
+                const reader = new FileReader();
+                reader.onload = () => importData(reader.result);
+                reader.readAsText(file);
+            } catch (e) {
+                alert(e);
+            }
+        }
+
+        function importData(responsesString) {
+            const json = JSON.parse(responsesString);
+            const response = document.getElementById("response");
+            response.textContent = responsesString;
+            initResponses("", json);
+        }
+
+        function listenReponses() {
+            for (let field of document.body.querySelectorAll('input[type="text"]')) {
+                field.addEventListener("change", event => updateField(event.target.id, event.target.value));
+            }
+            for (let field of document.body.querySelectorAll('input[type="url"]')) {
+                field.addEventListener("change", event => updateField(event.target.id, event.target.value));
+            }
+            for (let field of document.body.querySelectorAll('input[type="number"]')) {
+                field.addEventListener("change", event => updateField(event.target.id, event.target.valueAsNumber));
+            }
+            for (let field of document.body.querySelectorAll('input[type="checkbox"]')) {
+                field.addEventListener("change", event => updateField(event.target.id, event.target.checked));
+            }
+        }
+
+        function updateField(key, value) {
+            try {
+                const response = document.getElementById("response");
+                const responses = JSON.parse(response.textContent);
+                let domain = responses;
+                const path = key.split(".");
+                for (let i = 0; i < path.length - 1; i++) {
+                    if (!domain[path[i]]) {
+                        domain[path[i]] = {};
+                    }
+                    domain = domain[path[i]];
+                }
+                domain[path[path.length - 1]] = value;
+                response.textContent = JSON.stringify(responses, null, 2);
+                updateDownload(response.textContent);
+            } catch (e) {
+                alert(e);
+            }
+        }
+
+        function updateDownload(jsonString) {
+            if (download) {
+                URL.revokeObjectURL(download);
+            }
+            localStorage.setItem("responses", jsonString);
+            download = URL.createObjectURL(new Blob([jsonString], { type: 'application/json' }));
+            const link = document.getElementById("download");
+            link.href = download;
+            link.download = `Réponses du ${formatter.format(new Date())}.json`;
+        }
+
+        function initResponses(prefix, responses) {
+            for (let key in responses) {
+                const value = responses[key];
+                if (typeof value === "object") {
+                    initResponses(prefix + key + ".", value);
+                } else {
+                    const input = document.getElementById(prefix + key);
+                    if (input.tagName.toLowerCase() != "input") {
+                        throw input.tagName;
+                    }
+                    switch (input.type) {
+                        case "checkbox":
+                            input.checked = value;
+                            break;
+                        case "text":
+                        case "url":
+                            input.value = value;
+                            break;
+                        case "number":
+                            input.valueAsNumber = value;
+                            break;
+                        default:
+                            alert(input.type);
+                    }
+                }
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", init);
+    </script>
+    <style>
+        @media screen {
+            html {
+                height: 100%;
+                width: 100%;
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                margin: 0;
+                padding: 0;
+                height: 100%;
+                width: 100%;
+                display: flex;
+                overflow: hidden;
+            }
+        }
+
+        @media screen and (orientation: landscape) {
+            body {
+                flex-direction: row;
+            }
+
+            article {
+                width: 75%;
+            }
+
+            footer {
+                width: 25%;
+            }
+        }
+
+        @media screen and (orientation: portrait) {
+            body {
+                flex-direction: column;
+            }
+
+            article {
+                width: 100%;
+            }
+
+            footer {
+                width: 100%;
+            }
+        }
+
+        @media print {
+
+            h1,
+            h2,
+            h3 {
+                break-inside: avoid;
+                break-after: avoid;
+            }
+
+            p,
+            li {
+                widows: 4;
+                orphans: 4;
+                break-inside: avoid;
+            }
+
+            article {
+                width: 100%;
+            }
+
+            footer {
+                display: none;
+            }
+        }
+
+        article {
+            height: 100%;
+            overflow-y: auto;
+            padding: 0.5em;
+        }
+
+        footer {
+            padding: 0.5em;
+            height: 100%;
+        }
+
+        footer>details {
+            width: 100%;
+        }
+
+        pre {
+            background-color: beige;
+            color: black;
+            overflow-x: auto;
+            overflow-y: scroll;
+            width: 100%;
+            max-height: 20em;
+        }
+
+        section {
+            padding-bottom: 1em;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        ul {
+            list-style-type: none;
+            padding-left: 1em;
+        }
+
+        p {
+            text-indent: 1em;
+        }
+
+        p,
+        li {
+            text-align: justify;
+        }
+
+        h1 {
+            counter-reset: theme;
+        }
+
+        h2 {
+            counter-increment: theme;
+            counter-reset: section;
+        }
+
+        h2::before {
+            content: counter(theme) ". ";
+        }
+
+        h3 {
+            counter-increment: section;
+        }
+
+        h3::before {
+            content: counter(theme) "."counter(section, lower-alpha) ". ";
+        }
+
+        input[type="number"] {
+            width: 3em;
+            margin: 0.2em;
+        }
+    </style>
+    <title>Questionnaire pour la sincérité politique</title>
+</head>
+
+<body>
+
+    <article>
+        <h1>Questionnaire pour la sincérité politique</h1>
+        <section>
+            <h2>Cadre de vie</h2>
+
+            <h3>Immobilier</h3>
+            <p>La ville de Saint-Brieuc perd de la population depuis de nombreuses années. Quelle est votre programme pour inverser cet exode de la population du centre-ville?</p>
+            <ul>
+                <li data-checkbox="cadre.immobilier.immeuble">Construire de nouveaux immeubles collectifs sur des emplacements non bâtis (e.g. parvis de la gare sud, jardin de l'évêché, ...) ou à la place d'habitats existants de type maison.</li>
+                <li data-checkbox="cadre.immobilier.lotissement">Créer de nouveaux lotissements sur les espaces non bâtis (e.g. nouveaux lotissements à la Ville Jouha ou aux Villages).</li>
+                <li data-checkbox="cadre.immobilier.friches">Réhabiliter les friches industrielles pour créer de nouveaux bâtiments (densifier l'habitat par optimisation des dents creuses déjà bâties et non par création de collectifs ou étalement urbain aux dépens des espaces encore libres).</li>
+                <li data-checkbox="cadre.immobilier.optimisation">Remplir les logements vacants en encourageant la population à revenir en centre-ville (meilleur cadre de vie qu'en banlieue: plus d'espaces verts, moins de voitures). La limitation des automobiles en ville permet de réduire le stress/bruit ambiant et rend moins proche les communes dortoirs, augmentant mécaniquement les avantages à vivre en centre-ville.</li>
+            </ul>
+
+            <h3>Construction</h3>
+            <p>La construction de grands espaces en ville change le style de la ville. Les matériaux de construction actuels (e.g. béton, granit) ont suscité des oppositions à une ville trop minérale. Qu'en pensez-vous?</p>
+            <ul>
+                <li data-checkbox="cadre.construction.ere">Les nouveaux espaces urbains (Les Champs, Pôle d'échange multimodal) sont aérés, on s'y sent libre comme le vent, sans murs avec des avenues toutes droites.</li>
+                <li data-checkbox="cadre.construction.haie">Les nouveaux espaces urbains sont invivables car Saint-Brieuc est une ville maritime ayant régulièrement du vent. Les murs de pierre et les rues courbes sont une nécessité pour casser le vent et créer un microclimat confortable au niveau du sol. Les murs de pierre sont à la ville ce que les haies sont à la campagne et sont donc essentielles au confort du cadre de vie.</li>
+                <li data-checkbox="cadre.construction.moderne">Il n'y a pas de problème de minéralisation, car la construction traditionnelle utilisait depuis longtemps la pierre, tout aussi minérale.</li>
+                <li data-checkbox="cadre.construction.classique">La variété des murs de pierres tous différents avec leur mortier, leurs briques et leurs faïences ou les ouvrages d'Harel de la Noë parés de briques multicolores sont la construction locale qui fait le cachet de la ville et donc aussi sa richesse touristique.</li>
+                <li data-checkbox="cadre.construction.tourisme">Les matériaux comme le béton avec ajout de granit détruisent l'esthétique de la ville: le siège de l'agglo est un exemple de laideur avec son parement typique de barreaux de prison.</li>
+                <li data-checkbox="cadre.construction.taxe">Une maison entretenue paie actuellement une plus forte taxe foncière qu'une maison non entretenue. Ce système de taxation locale semble une volonté des autorités de détruire la ville. Le bon entretien d'une maison doit devenir un critère de réduction, non d'augmentation, de taxe foncière: la mairie doit cesser d'aider ceux qui n'ont pas entretenu leur maison à le faire avec l'argent de ceux qui ont entretenu correctement leur maison.</li>
+            </ul>
+
+            <h3>Espaces verts</h3>
+            <p>La présence de la nature en ville a été un sujet important de débats avec une demande de plus de nature en ville. Que proposez-vous à ce sujet?</p>
+            <ul>
+                <li data-checkbox="cadre.nature.construire">La ville de Saint-Brieuc a plus d'arbres par habitant que Rennes, grâce à ses vallées non construites. On peut donc continuer de construire sans nuire à la qualité de vie.</li>
+                <li data-checkbox="cadre.nature.arret">Il est essentiel de stopper l'étalement urbain qui entraîne la diminution des espaces naturels et le développement automobile, ce qui est incohérent avec l'objectif de transition énergétique.</li>
+                <li data-checkbox="cadre.nature.arbres">Il faut installer des arbres en ville, car <a href="http://www.leparisien.fr/elections/municipales/municipales-a-paris-et-si-on-plantait-des-arbres-pour-rafraichir-la-ville-23-01-2020-8242683.php">ceux-ci luttent contre la canicule, donnent de l'ombre et améliorent l'air</a>, c'est-à-dire exactement le contraire du bitume et des voitures (qui n'apportent que chaleur et pollution).</li>
+                <li data-checkbox="cadre.nature.poumons">Il faut (re-)créer des poumons verts: la re-végétalisation de l'avenue des Promenades pourrait remplacer la minéralisation de plus en plus importante du parc des Promenades dont la surface n'a fait que décroître depuis sa création, <a href="http://sallevirtuelle.cotesdarmor.fr/CP/cpx/consult.aspx?image=081164217041306">les boulevards suspendus pourraient être rendus aux transports en commun et à la promenade piétonne comme ils ont été conçus</a>, etc.</li>
+                <li data-checkbox="cadre.nature.prefecture">Le parc de la préfecture devrait être totalement ouvert au public. Le préfet pourrait être logé dans un endroit plus névralgique, tel que le <a href="https://lannuaire.service-public.fr/bretagne/cotes-d-armor/gendarmerie_departementale-22278-01">siège du groupement de gendarmerie départementale (30 rue de la Gare)</a>.</li>
+                <li data-checkbox="cadre.nature.deifier">Il faut déifier la réserve naturelle et son bassin versant, car <a href="https://www.lemonde.fr/planete/article/2017/03/20/la-nouvelle-zelande-dote-un-fleuve-d-une-personnalite-juridique_5097268_3244.html">c'est l'entité vivante</a> qui a créé le site de la ville de Saint-Brieuc. La Nature, vue comme notre Terre-Mère et <a href="https://fr.wikipedia.org/wiki/Ma%C3%AEtres_et_possesseurs_de_la_nature">non comme notre esclave</a>, pourrait ainsi retrouver sa place respectueuse de l'écologie.</li>
+            </ul>
+
+            <h3>Étalement urbain</h3>
+            <p>La construction de nombreux lotissements depuis des dizaines d'années a entraîné un fort étalement urbain aux dépens de la campagne, induisant alors la construction de routes, les raccordements aux réseaux d'eau potable et d'eaux usées. Qu'en pensez-vous?</p>
+            <ul>
+                <li data-checkbox="cadre.etalement.lotissement">Il faut poursuivre l'étalement urbain par des lotissements, car la population veut vivre près de la ville, mais en se sentant à la campagne sans avoir les nuisances sonores ou olfactives de la campagne.</li>
+                <li data-checkbox="cadre.etalement.agriculture">Il faut cesser l'étalement urbain qui détruit la richesse agricole de notre territoire et donc aussi les emplois agro-alimentaires.</li>
+                <li data-checkbox="cadre.etalement.neoruraux">Il faut cesser de taxer et de détruire le centre-ville et la campagne pour financer les résidences de néo-ruraux qui veulent cumuler la proximité du centre-ville (mais en le détruisant par le passage et le stationnement de leurs automobiles) avec la vie dans une campagne artificielle (sans paysans mais pleine de lotissements et de centres commerciaux nécessitant des infrastructures financées en partie par les taxes des autres citoyens).</li>
+            </ul>
+
+            <h3>Santé</h3>
+            <p>La politique de santé locale concerne tout autant la gestion au jour le jour que celle des situations plus complexes (crises sanitaires). Que préconisez-vous?</p>
+            <ul>
+                <li data-checkbox="cadre.sante.salaries">Créer des centres de santé municipaux avec des médecins salariés pour permettre d'avoir des rendez-vous rapidement.</li>
+                <li data-checkbox="cadre.sante.preventif">Lutter activement contre la pollution de l'air (e.g. voitures) et de l'eau (e.g. pesticides, engrais), diminuer la sédentarité pour faire progresser la santé globale des habitants et donc réduire le recours à la médecine.</li>
+                <li data-checkbox="cadre.sante.association">Inciter, par la mise à disposition de locaux publics, à la création de nouvelles associations d'écoute, pour aider les habitants à <a href="https://intervenir-addictions.fr/">abandonner les comportements addictifs</a> qui mettent en danger leur santé et celle des autres, tels que l'usage de drogue, de tabac, ou encore l'abus d'alcool, d'automobile, de vidéos (tv ou porno), d'Internet, de jeux (d'argent ou vidéos).</li>
+            </ul>
+
+        </section>
+
+        <section>
+            <h2>Déplacements</h2>
+
+            <h3>Usages de l'espace public</h3>
+            <p>L'espace public est, en particulier en zone urbanisée, consacré pour une part importante aux déplacements (routes, stationnement, trottoirs, pistes cyclables). Les utilisateurs sont souvent en concurrence donnant lieu à des conflits d'usage. De même, l'aménagement de cet espace public représente de gros budgets (tant communaux qu'intercommunaux, voire aussi départementaux pour la RN12 ou la rocade) où les différents usages sont en concurrence. Que proposez-vous sur ce sujet essentiel, source de très fortes tensions au sein de la ville?</p>
+            <ul>
+                <li data-checkbox="deplacements.espace.routes">Réduire l'espace dévolu aux piétons et vélos pour libérer de la place pour les voitures et diminuer les bouchons et augmenter les stationnements.</li>
+                <li data-checkbox="deplacements.espace.doux">La réduction de la place des transports doux n'a fait qu'augmenter le taux de motorisation et créer de nouveaux bouchons, car une voiture (et à fortiori un SUV) représente beaucoup plus de place occupée en ville qu'un piéton ou un vélo. Il faut donc réduire l'espace dévolu aux voitures pour redonner leur sécurité aux transports doux et mettre de la verdure en ville permettant enfin d'agir réellement en faveur du climat et de la santé.</li>
+                <li data-checkbox="deplacements.espace.remplissage">Augmenter le taux de remplissage des transports existants pour libérer de la place. Ainsi, il n'est guère acceptable que ce taux de remplissage ne soit usuellement que de 20% (la plupart des voitures ont en effet une seule personne à bord pour cinq places).</li>
+                <li data-checkbox="deplacements.espace.optimbus">Ouvrir le maximum de kilomètres-bus à l'accueil de passagers, utiliser l'<a href="https://www.ouest-france.fr/bretagne/saint-brieuc-22000/saint-brieuc-avec-le-nouveau-depot-aux-chatelets-les-bus-font-163-000-km-supplementaires-par-6663605">imprévoyance de l'agglomération</a> en faisant des Châtelets un nœud largement desservi, ce qui peut être utile pour le tourisme-nature en permettant de rejoindre tôt le matin, avant le ramassage scolaire toutes les parties de l'agglomération, lors de la prise de service du chauffeur (et d'en revenir le soir après dépose des scolaires).</li>
+                <li data-checkbox="deplacements.espace.richesse" id="appauvrissement">Réduire massivement le financement et la place de l'automobile pour faire abandonner ces voitures qui sont un gouffre financier appauvrissant les personnes et le territoire. Les <a href="https://www.automobile-club.org/actualites/la-vie-de-l-aca/budget-de-l-automobiliste-de-l-aca-avril-2019">milliers d'euros (0,5 à 1 euro du kilomètre)</a> dépensés pour acheter une voiture et du carburant ne profitent pas au territoire local et réduisent massivement le pouvoir d'achat des habitants. Avec les transports doux, peu d'argent quitte le territoire. Même le bus garde plus de richesse sur le territoire, grâce au salaire du chauffeur local.</li>
+                <li data-checkbox="deplacements.espace.racket">Cesser le financement des routes, car c'est un non-sens à l'heure de la transition énergétique de forcer les non-automobilistes à financer par leurs impôts la construction de routes gratuites et la pollution due aux automobiles. À défaut, au moins exempter de taxe foncière les foyers n'ayant pas d'automobile, vu que les routes sont affectées à une caste particulière (automobilistes) et donc que les non-motorisés n'ont pas à être ainsi rackettés pour financer les avantages d'une telle caste, cause de nuisances massives en ville.</li>
+                <li data-checkbox="deplacements.espace.bruit">Les véhicules à moteurs produisent une pollution sonore étouffant les formes usuelles de la vie <a href="http://sallevirtuelle.cotesdarmor.fr/CP/cpx/consult.aspx?image=081164217236498">vivant</a> (e.g. commerce, jeux d'enfants, ...). Ce grondement sinistre et perpétuel ressemble, poue celui qui n'est pas dans une voiture, au roulement funèbre de véhicules, <a href="https://fr.wikipedia.org/wiki/Ankou">tels des chariots de l'Ankou</a>.</li>
+                <li data-checkbox="deplacements.espace.sante">Cesser de dépenser des fortunes pour goudronner les petites routes au prix de l'imperméabilisation des sols et au profit des <a href="http://www.onaps.fr/boite-outils-et-ressources/ressources-bibliographiques/sedentarite-inactivite-transports/le-british-medical-journal-publie-une-nouvelle-etude-sur-les-avantages-du-velo-et-de-la-marche/">inactifs, incapables de se déplacer sans moteur et carburant</a>. Les petites routes devraient être des chemins de terre avec une rangée d'arbres au milieu, donnant de l'ombre et recréant la vie, tout ne dérangeant ainsi pas les maisons par leurs racines. Cela permettra de redonner leur santé à la fois au sol et à toutes ces personnes inactives en les incitant à de petites marches à pied dans un cadre idéal. Bien sûr une desserte par minibus ou vélo-taxi (à la demande) assurerait le déplacement des personnes à faible mobilité.</li>
+                <li data-checkbox="deplacements.espace.qualite">Dépenser plus pour les routes pour accroître la qualité et le nombre des routes et donc améliorer la sécurité. La verbalisation est un racket des automobilistes et doit être réduite.</li>
+                <li data-checkbox="deplacements.espace.reduire">Dépenser moins pour les routes mais réduire la vitesse et la qualité du revêtement pour accroître la sécurité car une route trop bonne est une incitation à violer les limites de vitesse et cause de nombreux accidents et donc des morts et des blessés. La verbalisation est une bonne chose; respecter le code de la route et les vitesses limites est la bonne astuce pour être sûr ne pas être verbalisé.</li>
+                <li data-checkbox="deplacements.espace.justice">Choisir de violer le code de la route, c'est choisir de mettre sciemment en danger la vie des autres personnes. Renverser une personne (faute de maîtrise du véhicule ou lorsque celle-ci est renversée parce qu'une voiture s'était garée sur le trottoir empêchant l'usage de celui-ci) est un crime volontaire, même si la victime est aléatoire (ce qui est aussi le cas de la plupart des victimes de serial killer). Toute violation, même légère, du code de la route doit être jugée au pénal avec, pour les cas les moins graves, des peines en chantiers de réinsertion pour mettre aux normes les trottoirs par réduction des routes.</li>
+                <li data-checkbox="deplacements.espace.cloisons">Supprimer les grands rond-points qui servent souvent de piste de vitesse aux automobilistes tout en augmentant la distance à parcourir aux piétons et vélos pour parcourir un même trajet. En général, les rond-points devraient être traversables en ligne droite par les piétons et les vélos (il suffit de mettre des passages protégés). <a href="https://leshorizons.net/reduire-usage-voiture-ville-exemple-gand/">Cloisonner les quartiers</a> pour que les transports doux redeviennent le moyen de transport le plus efficace à courte distance.</li>
+                <li data-checkbox="deplacements.espace.liberte">Ne pas stigmatiser les automobilistes car la voiture est un symbole de la liberté et de la réussite.</li>
+                <li data-checkbox="deplacements.espace.stigmatiser">Stigmatiser les automobilistes car il est essentiel pour leur santé et leur propre liberté qu'ils prennent conscience de leur comportement addictif et de la dépendance induite qui les rend inaptes même à imaginer leur mobilité sans voiture ou sans carburant, <a href="https://www.saintbrieuc-armor-agglo.fr/fileadmin/Volume2_LesAnnexes.pdf#page=8">donc les rend nettement plus captifs que des piétons</a>.</li>
+                <li data-checkbox="deplacements.espace.impunite" id="impunite">La mairie de Saint-Brieuc a offert <a href="https://www.saintbrieuc-armor-agglo.fr/fileadmin/Volume1_PDU.pdf#page=64">l'impunité aux automobilistes relativement au stationnement sauvage sur les trottoirs, car reportant toujours à plus tard toute sanction</a>, créant des places jusque sur les trottoirs au mépris des normes de largeur de ceux-ci, voire carrément <a href="#trottoir">en supprimant les trottoirs</a>. Que ce soit par clientélisme ou par goût personnel de l'automobile, cette attitude est intolérable.</li>
+                <li data-checkbox="deplacements.espace.centaure">Le centaure est un hybride d'humain et de cheval. Sa réputation comme symbole de concupiscence et d'ébriété est exemple du caractère bidirectionnel de l'hybridation: l'humain se croit maître du cheval et se rêve plus beau, plus fort, plus libre, mais il est en fait devenu esclave de ses nouvelles pulsions de puissance. La voiture n'est qu'un cheval-vapeur, encore plus puissant et donc encore plus dangereux, car encore plus générateur de <a href="https://solidarites-sante.gouv.fr/prevention-en-sante/addictions/">comportement addictif</a> et incitant à écraser les autres par la puissance qu'elle semble donner. Interdire ou au moins diminuer fortement l'automobile protège la société entière, via toutes ses richesses.</li>
+                <li data-checkbox="deplacements.espace.paix">Le <a href="#impunite">parti-pris de la mairie</a> pour les automobilistes a créé une ambiance de guerre civile sur la voirie et une <a href="#appauvrissement">grande pauvreté des habitants et du commerce</a>: la mairie a donc failli à sa mission politique de vivre ensemble et de prospérité commune. La seule solution pour rétablir la paix et la richesse est de montrer enfin du respect envers les piétons et vélos tout en diminuant le gâchis automobile. Pour cela, il faut mettre immédiatement aux normes les trottoirs et pistes cyclables sur toute la commune et l'agglomération. Pour toute voirie, il faut donc affecter d'abord aux piétons au moins une surface respectant les normes légales (largeur, planéité, etc.), puis de même pour les pistes cyclables séparées et finalement, en dehors du centre-ville, autoriser l'automobile sous condition de vitesse. Après avoir ainsi réaffecté l'espace public, il suffit de mettre quelques poteaux barrant l'accès aux voitures aux routes/quartiers interdits et de préciser, par la peinture, la nouvelle affectation de la voirie.</li>
+            </ul>
+
+            <h3>Stationnement</h3>
+            <p>La question du stationnement est aussi un sujet de débats acharné. Quelles sont vos propositions?</p>
+            <ul>
+                <li data-checkbox="deplacements.stationnement.parking">Il faut créer plus de stationnements en ville pour inciter les automobilistes à venir.</li>
+                <li data-checkbox="deplacements.stationnement.vie">Il faut supprimer des stationnements en ville pour améliorer le cadre de vie et permettre aux clients des commerces d'être en sécurité.</li>
+                <li data-checkbox="deplacements.stationnement.bleu">Il faut convertir plus de stationnements en ville, en zones bleues, pour y faire tourner les voitures et éviter les voitures ventouses.</li>
+                <li data-checkbox="deplacements.stationnement.gratuit">Il faut rendre le stationnement gratuit en ville pour inciter à y venir.</li>
+                <li data-checkbox="deplacements.stationnement.payant">Il faut augmenter le prix du stationnement en ville car il est immoral et illégal que Saint-Brieuc dépense pour créer des parkings et <a href="https://www.ouest-france.fr/bretagne/saint-brieuc-22000/saint-brieuc-toujours-ferme-le-parking-de-gouedic-plombe-le-budget-6247972">subventionne ceux-ci</a>, donnant donc de l'argent, issu de tous, aux pollueurs plutôt que de taxer ceux-ci (<a href="https://fr.wikipedia.org/wiki/Principe_pollueur-payeur">principe pollueur-payeur</a>).</li>
+                <li data-checkbox="deplacements.stationnement.bus">La mairie se vante d'avoir mis la première heure de parking gratuite à chaque accès (voire plus comme au parking de Robien ou tout le temps à côté de Steredenn ou sur la voirie hors centre-ville) mais <a href="https://www.ouest-france.fr/bretagne/saint-brieuc-22000/cinq-questions-sur-le-bus-en-ville-et-dans-l-agglo-6006447">refuse de mettre la première heure de bus gratuite à chaque accès</a>: c'est une politique de lutte contre les transports en commun et en faveur uniquement de la voiture, dont <a href="https://www.saintbrieuc-armor-agglo.fr/fileadmin/Volume1_PDU.pdf#page=12">les résultats (cf. graphe)</a> sont la conséquence naturelle, en contradiction totale avec <a href="https://www.saintbrieuc-armor-agglo.fr/fileadmin/plan_deplacements_urbains.pdf#page25">les objectifs déclarés en 2006</a>.</li>
+                <li data-checkbox="deplacements.stationnement.relais">Il faut construire des parkings-relais gratuits en périphérie pour inciter les voitures à rester aux portes de la ville et à entrer en ville à pieds, en vélo ou en bus.</li>
+                <li data-checkbox="deplacements.stationnement.hypers">Les parkings-relais gratuits en périphérie existent déjà, ce sont ceux des hypermarchés, lesquels ont créé le problème de la voiture. Il faut forcer les automobilistes à ne plus entrer en ville, ils utiliseront alors les parkings-relais gratuits des hypermarchés jusqu'à ce que ceux-ci rendent le stationnement payant au bout d'une, deux ou trois heures.</li>
+                <li data-checkbox="deplacements.stationnement.public">Certaines rues sont embouteillées de voitures, car les administrations publiques y ont installé des parkings gratuits pour leurs employés. Il faut que ces parkings soient payants par équité avec les autres employés, d'ailleurs cela ne serait-il pas un avantage en nature non déclaré pour l'URSSAF?</li>
+                <li data-checkbox="deplacements.stationnement.reparation">Il faut verbaliser strictement le stationnement sur les trottoirs et affecter une partie de l'argent récupéré à la réparation des dégradations commises par les véhicules sur les trottoirs (e.g. plaques d'égouts publics ou de caves privées cassées ou ployées sous le poids de véhicules trop lourds).</li>
+            </ul>
+
+        </section>
+
+        <section>
+            <h2>Infrastructures</h2>
+
+            <h3>Administrations publiques</h3>
+            <p>Le déménagement des administrations publiques hors du centre-ville est souvent accusé de contribuer à dégrader l'état de celui-ci (e.g. problématique des bâtiments de la Justice) et à créer des zones artificielles en banlieue uniquement conçues pour le public motorisé (e.g. chemin entre Plérin centre et l'hôpital privé) en générant un sentiment de mépris chez ceux non-motorisés, car volontairement exclus alors de la société par les politiques communales.</p>
+            <ul>
+                <li data-checkbox="infrastructures.justice.centre">Les tribunaux doivent rester en centre-ville car c'est ainsi qu'elle sera le plus accessible à tous depuis tout le département. Réutiliser la dent creuse des anciennes cliniques entre la rue du Vieux Séminaire et le 71ème RI lui permettrait même de se rapprocher des gares et d'en faire une justice pour tous.</li>
+                <li data-checkbox="infrastructures.justice.banlieue">Les tribunaux doivent déménager en banlieue pour disposer de vastes bâtiments modernes avec de grands parkings pour les automobilistes. Les bâtiments du centre-ville se rempliront peu à peu, lorsque le besoin s'en fera sentir. En l'installant en banlieue, la ville grandira et pourra montrer son importance.</li>
+            </ul>
+
+            <p>De même, la problématique des écoles pose usuellement question entre une multiplicité de petites écoles ou de moins nombreuses écoles de grande taille.</p>
+            <ul>
+                <li data-checkbox="infrastructures.ecole.grande">Les écoles sont souvent des bâtiments anciens qui nécessitent des réhabilitations. De plus, les habitants d'un quartier vieillissant les enfants y sont moins nombreux jusqu'au renouvellement de la population. Il faut créer de écoles nouvelles et réduire leur nombre avec une plus grande taille permettant ainsi des économies d'échelle.</li>
+                <li data-checkbox="infrastructures.ecole.petite">Créer des écoles de petite taille permet de les mettre au plus proche des enfants leur permettant de venir à pieds et faisant des économies d'infrastructures, rien que par l'absence de routes et de parkings et la meilleure sécurité intrinsèque (réduisant aussi le besoin de personnels payés par la mairie pour sécuriser les entrées-sorties d'école).</li>
+            </ul>
+
+            <h3>Port de commerce du Légué</h3>
+            <p>Le port de commerce du Légué induit des problèmes de vase et de circulation. Cette question est uniquement relative à l'activité port de commerce (ni au port de plaisance ni à la réparation navale).</p>
+            <p>Le désenvasement du port du Légué est <a href="https://www.ouest-france.fr/bretagne/saint-brieuc-22000/saint-brieuc-cesson-la-vase-de-la-plage-du-valais-s-invite-aux-voeux-6677951">accusée de détruire la plage du Valais</a> voire la réserve naturelle. De même, la circulation de véhicules lourds est effectuée sur des chaussées, dont certaines (Harel de la Noë) n'ont pas nécessairement été conçues pour supporter des véhicules lourds. L'effondrement d'un pont en Haute-Garonne a rappelé récemment que la bonne gestion des véhicules lourds est aussi un problème vital. Quel doit être l'avenir du port de commerce du Légué?</p>
+            <ul>
+                <li data-checkbox="infrastructures.port.ecluse">Construire le port comme prévu, voici des dizaines d'années, lors de la construction de la digue, en rajoutant l'écluse pour le mettre en eau en permanence et non en port d'échouage. Cela permettrait d'y développer l'activité économique commerciale, et donc de créer de la richesse.</li>
+                <li data-checkbox="infrastructures.port.quai">Développer l'activité commerciale du port du Légué en construisant un quatrième quai, mais sans fermer le port par une nouvelle écluse.</li>
+                <li data-checkbox="infrastructures.port.maintenir">Maintenir l'activité commerciale du port du Légué, mais ni la développer sensiblement ni l'arrêter.</li>
+                <li data-checkbox="infrastructures.port.nature">Cesser l'activité de port de commerce pour arrêter de polluer la réserve naturelle et de tout envaser, comme la plage du Valais.</li>
+                <li data-checkbox="infrastructures.port.stop">Supprimer l'activité de port de commerce au Légué. Elle est inutile: le bois peut venir de centre Bretagne, n'exportons pas de la viande nourrie avec des aliments importés polluant nos nappes phréatiques, les ferrailles sont utiles à Saint-Brieuc Fonderie, le combustible de déchets est plus écologique s'il est utilisé localement, etc..</li>
+                <li data-checkbox="infrastructures.port.import">Supprimer l'activité du port de commerce, car elle ne crée pas de richesse. Les importations sont en effet une perte de richesse pour le territoire (par la sortie d'argent correspondante) et les produits recyclables devraient être utilisés sur place pour remplacer des importations précédentes.</li>
+                <li data-checkbox="infrastructures.port.harel">La desserte du port de commerce est adéquate (surtout s'il faut supprimer le port de commerce) est n'a pas lieu d'être changée.</li>
+                <li data-checkbox="infrastructures.port.route">La desserte doit passer par une nouvelle route à construire, utilisant une pente plus régulière par exemple par un nouveau pont sur le Gouët puis une remontée vers La Prunelle en passant aux abords de Couvran.</li>
+                <li data-checkbox="infrastructures.port.goudron">La desserte du port de commerce doit passer par l'ancienne voie ferrée du Légué qui doit être goudronnée.</li>
+                <li data-checkbox="infrastructures.port.train">La desserte du port de commerce doit faire sa transition énergétique et il faut réhabiliter la voie ferrée du Légué.</li>
+                <li data-checkbox="infrastructures.port.valais">La desserte du port doit passer par la plage du Valais maintenant que celle-ci n'a plus d'usage en tant que plage, étant donnée la vase. Cela permettra d'assurer un raccordement avec une pente plus régulière vers la RN12 sans le risque d'accident de véhicules très lourds sur les ouvrages anciens d'Harel de la Noë.</li>
+            </ul>
+
+            <h3>Baie de Saint-Brieuc</h3>
+            <p>Cette question portera sur votre vision d'avenir de la baie de Saint-Brieuc (tant sur le port que le Valais) hors port de commerce.</p>
+            <ul>
+                <li data-checkbox="infrastructures.baie.reparation">Développer l'activité de réparation navale qui est le vrai atout du port de Saint-Brieuc, grâce au fort vivier humain et industriel à terre, de Saint-Brieuc jusqu'à Lamballe et Guingamp (par rapport à tout autre port des Côtes-d'Armor) ainsi qu'au faible impact sur la réparation navale du non-accès à la mer à temps complet.</li>
+                <li data-checkbox="infrastructures.baie.hameau">Régulariser les cabanons du Valais sous la forme d'un hameau nouveau, car il nous semble intéressant.</li>
+                <li data-checkbox="infrastructures.baie.squatteurs">Démolir les cabanons du Valais car il n'est pas normal de régulariser des squatteurs et de bétonner le littoral de la réserve <a href="https://www.ouest-france.fr/bretagne/saint-brieuc-22000/saint-brieuc-cabanons-du-valais-un-statut-juridique-l-etude-6310314">en offrant des réseaux d'eau potable, assainissement, électricité</a> pour des personnes qui s'approprient le bien des autres, méprisent les règles communes de construction, etc.. Les reconnaître serait délégitimé la mairie de Saint-Brieuc, vu qu'elle reconnaîtrait le fait accompli par les personnes agissant en toute illégalité.</li>
+            </ul>
+
+            <h3>Trémuson</h3>
+            <p>Trémuson est certes une commune différente, mais fait partie de l'agglomération et héberge actuellement l'aéroport de Saint-Brieuc, dont la cour des comptes a, <a href="https://actu.fr/societe/en-bretagne-certains-aeroports-brassent-lair-selon-cour-comptes_31746339.html">entre autres</a>, récemment évoqué le sujet et le problème de ses subventions publiques à <a href="https://www.letelegramme.fr/ig/generales/regions/cotesarmor/saint-brieuc-a-quoi-sert-cet-aeroport-09-07-2013-2165169.php">plusieurs centaines d'euros par passager</a>.</p>
+            <p>Il est envisagé de rajouter aussi une piste routière autour de celle de l'aéroport, ce qui est un <a href="https://www.letelegramme.fr/cotes-darmor/saint-brieuc/saint-brieuc-armor-agglomeration-sortie-de-route-pour-la-piste-educative-routiere-26-09-2019-12393788.php">sujet de désaccords</a> au sein de l'agglomération. Quelles positions soutiendrez-vous?</p>
+            <ul>
+                <li data-checkbox="infrastructures.piste.aeroport">Il faut maintenir le développement de l'aéroport et continuer à le subventionner. Ce n'est pas incompatible avec le train, malgré la proximité des aéroports de Rennes, Brest, Nantes. Il peut aussi servir d'<a href="http://www.bretagne-bretons.fr/saint-brieuc-aeroport-na-jamais-decolle/">aéroport de secours</a> quitte à faire venir <a href="https://www.ccomptes.fr/sites/default/files/EzPublish/BRR2017-10.pdf#page=13">les personnels (e.g. pompiers)</a> en urgence depuis un autre aéroport.</li>
+                <li data-checkbox="infrastructures.piste.atterrir">Il faut cesser ce gâchis de subventions publiques et renoncer à l'aéroport. Il serait beaucoup moins coûteux de développer les liaisons avec les grands aéroports bretons, quitte à proposer immédiatement une ligne routière, par autocar, allant de Nantes à Saint-Brieuc voire Lannion (concerné pour son mini-aéroport et par <a href="https://www.ouest-france.fr/pays-de-la-loire/nantes-44000/alcatel-orvault-le-site-avec-ses-500-ingenieurs-cest-fini-3727985">le lien par navette avec Nantes suite à l'historique de Nokia à Orvault</a>) pour <a href="https://www.lnobpl.fr/sites/lnobpl.fr/files/telechargements/documents/mediatheque/Bilan%20de%20la%20concertation%20de%20l'%C3%A9tape%20compl%C3%A9mentaire%20au%20d%C3%A9bat%20public.pdf#page=13">évaluer et préparer les évolutions ferroviaires possibles</a>.</li>
+                <li data-checkbox="infrastructures.piste.modedevie">La piste routière correspond à notre mode de vie automobile et l'on trouvera le carburant quitte à se servir nous-même <a href="https://www.lepoint.fr/monde/syrie-trump-veut-garder-le-petrole-22-10-2019-2342846_24.php">comme Donald Trump</a>. Georges Bush Senior disait déjà à Rio en juin 1992 à la conférence des Nations unies sur le développement durable que le "mode de vie américain n'est pas négociable". Le mode de vie français ne l'est pas non plus et l'automobile en fait partie.</li>
+                <li data-checkbox="infrastructures.piste.electrique">La piste routière est essentielle et le carburant est un problème qui sera résolu ultérieurement par la science par exemple en remplaçant le carburant par l'électricité avec des batteries pour son stockage.</li>
+                <li data-checkbox="infrastructures.piste.energie">L'énergie ne se limite pas à une hypothétique solution scientifique, c'est un problème de fond. Gaspiller du carburant ou de l'électricité est le même problème, car l'électricité doit être produite et cela correspond à de la métallurgie, chimie et béton (e.g. centrales et déchets nucléaires, éoliennes, panneaux solaires, moteurs ou batteries de stockage). Toute construction ou futur recyclage d'un site de production électrique consomme énormément d'énergie et crée énormémement de pollution. Il faut économiser l'énergie: les chats sont des exemples de plus faible pression sur leur environnement grâce à leurs économies d'énergie.</li>
+                <li data-checkbox="infrastructures.piste.pollution">La notion de piste routière est source de pollution indépendamment même du carburant, car <a href="https://www.rtbf.be/info/dossier/bon-a-savoir/detail_pneus-et-freins-polluent-plus-que-votre-pot-d-echappement?id=10112509">l'abrasion des pneus et des freins est la première source d'émission de particules fines</a>.</li>
+            </ul>
+
+        </section>
+
+        <section>
+            <h2>Sécurité</h2>
+            <h3>Insécurité</h3>
+            <p>Il existe un ressenti général d'insécurité en ville, souvent polymorphe selon l'heure de la journée ou la personne concernée. Les causes et les effets en résultant sont assez variés (e.g. perte d'attractivité du centre-ville). Que proposez-vous pour remédier à l'insécurité?</p>
+            <ul>
+                <li data-checkbox="securite.danger.journalier">Développer les emplois payés à la journée (e.g. entretien des espaces publics) car ils sont un tremplin d'intégration des personnes en marge de la société.</li>
+                <li data-checkbox="securite.danger.lits">Réduire le mobilier urbain (sièges, bancs) car ce sont des points de regroupement de marginaux et de leurs animaux stressants.</li>
+                <li data-checkbox="securite.danger.sieges">Augmenter les lieux de repos (sièges, bancs) car leur absence décourage les personnes handicapées ou âgées et crée un inconfort pour le promeneur et le chineur.</li>
+                <li data-checkbox="securite.danger.proprete">Augmenter le nombre de toilettes publiques gratuites et de poubelles dans la rue ainsi que verbaliser leur non-usage pour rendre la ville plus propre.</li>
+                <li data-checkbox="securite.danger.crottoir">Sanctionner réellement les propriétaires de chien qui ne ramassent pas les crottes de leur animal, car cela fait perdre toute beauté à la ville vu qu'il faut plus ne regarder que l'endroit où l'on pose les pieds. Une solution pourrait être <a href="https://www.cnews.fr/monde/2020-02-25/la-ville-de-malnate-analyse-ladn-des-crottes-de-chien-pour-nettoyer-ses-rues-930545">le fichage ADN des chiens</a>, pour éviter que les trottoirs ne soient que des crottoirs.</li>
+                <li data-checkbox="securite.danger.seniors">Verbaliser massivement le non-respect de la priorité piéton sur les passages cloutés, car cela crée un sentiment d'insécurité, voire de terreur face aux voitures, faisant en particulier perdre confiance aux seniors en leurs possibilités de se déplacer par eux-mêmes.</li>
+            </ul>
+
+            <h3>Sécurité routière</h3>
+            <p>De nombreux accidents ou morts suite à la violence routière (e.g. enfants aux abords des écoles, fort sentiment d'insécurité en particulier des personnes âgées) ont suscité diverses mesures dans d'autres villes. Quelles sont celles que vous comptez mettre en œuvre lors de votre prise de fonction?</p>
+            <ul>
+                <li data-checkbox="securite.voirie.ecoles"><a href="https://www.francebleu.fr/infos/education/securite-des-barrieres-bloquent-maintenant-la-circulation-devant-les-ecoles-de-la-riche-1510076301">Fermer la circulation</a> aux abords des écoles aux heures d'entrées et de sorties de classes.</li>
+                <li data-checkbox="securite.voirie.poubelles">Réaffecter une partie des places de stationnement de voitures à des points de regroupement des poubelles pour éviter leur encombrement rendant les trottoirs inutilisables et dangereux.</li>
+                <li data-checkbox="securite.voirie.encombrement">La mairie accepte que les trottoirs soient rendus impraticables à cause des poubelles ou des voitures stationnées, alors qu'elles ne sont déjà souvent même pas aux normes actuelles de largeur. Elle devrait donc considérer tout aussi normal que les piétons stationnent pour pique-niquer au milieu des routes ou que les poubelles soient déplacées en plein milieu des voies de circulation des voitures (routes). Seule une mairie considérant ouvertement que les piétons sont des sous-citoyens et que les automobilistes sont une race supérieure pourrait ne pas accepter que les piétons se comportent ainsi comme les automobilistes et ne pas acquiescer à cette question.</li>
+                <li data-checkbox="securite.voirie.suv">Réduire de 10 km/h la vitesse limite de circulation des véhicules hauts (e.g. SUV) suite à <a href="https://fr.wikipedia.org/wiki/Critiques_contre_les_SUV_et_4x4#S%C3%A9curit%C3%A9_et_accidentologie">leur dangerosité plus élevée (e.g. traumatismes crâniens)</a>.</li>
+                <li data-checkbox="securite.voirie.coeur">Passer tout le cœur de ville (y compris places de la Résistance et de Gaulle) en zones piétonnes interdites à tout véhicule hormis la NCV.</li>
+                <li data-checkbox="securite.voirie.centre">Passer tout le centre-ville (habitat accolé, type: Centre, Saint-Michel, Robien) en zones transports doux interdites à tout véhicule à moteur, hormis bus TUB et cars.</li>
+                <li data-checkbox="securite.voirie.blocage">Comme la mairie n'a rien fait pour garantir la liberté de circulation des piétons, <a href="https://www.saintbrieuc-armor-agglo.fr/fileadmin/Volume1_PDU.pdf#page=64">ce qu'elle le reconnaît elle-même</a>, ceux-ci pourraient choisir de <a href="https://actu.fr/grand-est/sarreguemines_57631/video-centre-ville-sarreguemines-bloque-par-quatre-gilets-jaunes-un-passage-pieton_20137225.html">bloquer la ville légalement, comme l'ont fait des gilets jaunes</a> jusqu'au respect effectif et immédiat des normes légales de largeur et d'accessibilité des trottoirs et pistes cyclables. Ne pas approuver ce point signifierait que les décisions municipales n'auraient pas plus de légitimité et de validité que celles de définition des trottoirs pour lesquelles la mairie semble n'avoir aucun respect.</li>
+                <li data-checkbox="securite.voirie.planeite">Pour éviter les excès de vitesse, il faut construire les routes à l'image des trottoirs. Elles devraient ainsi être fréquemment réduites à une largeur inférieure à celle usuelle d'une voiture, disposer de nombreux changements de hauteur abrupts d'environ une bonne dizaine de centimètres de dénivelé, comme les trottoirs. Ainsi le choc de la chute ou du heurt lors de la montée contribuerait à limiter les excès de vitesse.</li>
+            </ul>
+
+            <h3>Mise en œuvre</h3>
+            <p>Avoir une politique visant à la sécurisation n'est rien s'il n'y a pas contrôle et verbalisation des infractions. Pour cela, l'aspect éducatif de publication des résultats des actions sera une partie intégrante des actions. Mais l'éducation n'est pas la seule solution; quelles sont les mesures que vous comptez mettre en œuvre?</p>
+            <ul>
+                <li data-checkbox="securite.controle.rapport">Publier chaque semaine un rapport du nombre de verbalisations sur voirie, par type d'infractions.</li>
+                <li data-checkbox="securite.controle.video">Utiliser la vidéosurveillance municipale pour <a href="https://www.securite-routiere.gouv.fr/radars/video-verbalisation">verbaliser les infractions à distance</a>, comme dans de nombreuses villes françaises, et publier chaque semaine un rapport du nombre de verbalisations à distance, par type d'infractions.</li>
+                <li data-checkbox="securite.controle.lapi">Équiper la police municipale d'un véhicule de lecture automatique des plaques d'immatriculation et l'utiliser pour verbaliser le stationnement très gênant, <a href="https://france3-regions.francetvinfo.fr/bretagne/finistere/brest/brest-nombre-pv-135-euros-double-au-mois-aout-1547304.html">comme à Brest</a>. Publier un rapport hebdomadaire du nombre de verbalisations semi-automatisées, par type d'infractions.</li>
+                <li data-checkbox="securite.controle.collaboratif">Utiliser les <a href="https://www.20minutes.fr/societe/2618655-20191002-vigilo-appli-mobile-aide-cyclistes-signaler-abus-rue">données collaboratives</a> pour verbaliser les infractions à distance et publier chaque semaine un rapport du nombre de verbalisations collaboratives, par type d'infractions, en motivant les non-verbalisations (e.g. problème résolu entre temps, avec la date et l'heure de passage de la police municipale).</li>
+                <li data-checkbox="securite.controle.deminage">Appliquer strictement les normes de sécurité et faire <a href="http://www.leparisien.fr/paris-75/paris-75006/paris-il-gare-sa-porsche-sur-une-place-de-taxi-les-demineurs-la-font-exploser-22-11-2016-6362058.php">déminer tout véhicule</a> en stationnement très gênant, car le conducteur a choisi alors de mettre sciemment en danger la vie des usagers fragiles (piétons, vélos devant aller sur route ; pompiers ne pouvant accéder aux bouches incendies) donc qu'il était motivé par des intentions malfaisantes. De plus, un véhicule présente une bien plus grande dangerosité (e.g. voitures piégées) qu'une valise, laquelle sera pourtant déminée selon les normes de sécurité.</li>
+                <li data-checkbox="securite.controle.detritus">Dans le cas de points de regroupement des poubelles pour libérer les trottoirs, tout véhicule qui s'y garera sera alors considéré comme ayant accepté sa nature de détritus et envoyé directement à la casse.</li>
+            </ul>
+
+        </section>
+
+        <section>
+            <h2>Politique de la commune et de l'agglomération</h2>
+
+            <h3>Périmètre communal</h3>
+            <p>La centralisation permet de disposer de plus de moyens pour les projets, mais fait perdre le contact avec le terrain, car le nombre d'actions différentes possibles pour un décideur humain reste faible. La décentralisation permet de ressentir les besoins et d'avoir beaucoup plus d'axes d'actions ciblées: ce sont les petites rivières qui font les grands fleuves. Le périmètre communal et intercommunal détermine donc l'action de celle-ci. Que proposez-vous?</p>
+            <ul>
+                <li data-checkbox="politique.perimetre.agrandir">Agrandir la ville de Saint-Brieuc en fusionnant avec les communes de première couronne car leur population et en lien permanent avec ceux de Saint-Brieuc. Cela donnerait une plus grande force de frappe financière à la commune résultante.</li>
+                <li data-checkbox="politique.perimetre.centre">Scinder le centre urbanisé (habitat à murs largement mitoyens, comme Centre, St-Michel, Robien) dans une commune nouvelle, car cela lui permettrait d'avoir une politique locale pertinente pour un centre-ville (e.g. moins de voitures détruisant le pouvoir d'achat des habitants, plus de piétons et vélos évitant la sédentarité), à la fois sobre et autonome, contrairement à celle actuelle favorisant les néo-ruraux. Cette politique permettrait à son commerce de survivre, comme Paris peut réaliser une politique urbaine par sa liberté vis-à-vis de l'Île de France <a href="http://www.leparisien.fr/seine-saint-denis-93/disparition-de-bobigny-2-il-est-temps-que-ca-s-arrete-01-05-2019-8063991.php">s'auto-détruisant</a>.</li>
+            </ul>
+
+            <h3>Votre candidature</h3>
+
+            <p><label for="politique.candidature.programme">Veuillez indiquer ci-dessous un lien vers un site web où se trouve votre programme complet pour le lecteur désireux d'en savoir d'en prendre pleinement connaissance.</label></p>
+            <p><input id="politique.candidature.programme" type="url" size="60" /></p>
+
+            <p>Quels sont les objectifs de votre candidature?</p>
+            <ul>
+                <li data-checkbox="politique.candidature.administrer">Administrer la ville de Saint-Brieuc</li>
+                <li data-checkbox="politique.candidature.controler">Contrôler la bonne administration de Saint-Brieuc</li>
+                <li data-checkbox="politique.candidature.temoigner">Témoigner d'un projet possible pour Saint-Brieuc</li>
+            </ul>
+
+            <p>Que pensez-vous de la politique de l'équipe municipale sortante?</p>
+            <ul>
+                <li data-checkbox="politique.candidature.continuite">Notre liste est dans la continuité et poursuivrait la tâche de l'équipe municipale sortante.</li>
+                <li data-checkbox="politique.candidature.opposition">Notre liste est en opposition avec l'action de l'équipe municipale sortante.</li>
+                <li data-checkbox="politique.candidature.futur">Notre liste ne se préoccupe pas de l'équipe municipale sortante: le passé est mort, seul le futur nous importe.</li>
+            </ul>
+
+            <p><label for="politique.candidature.fusion">La question suivante n'est potentiellement applicable qu'en cas de réponse au formulaire lors du second tour avec fusion de listes. Quelles sont les têtes des listes du premier tour fusionnant dans votre liste de second tour?</label></p>
+            <p><input id="politique.candidature.fusion" type="text" /></p>
+
+            <h3>Transparence</h3>
+            <p>Le <a href="https://www.vie-publique.fr/eclairage/24030-municipales-2020-les-regles-de-financement-de-la-campagne-electorale">financement</a> des campagnes politiques a toujours été l'objet de nombreuses suspicions publiques alimentées par un secret qui a induit de tels doutes. Quelles actions mettrez-vous en œuvre dans cette campagne électorale, par souci de transparence?</p>
+            <ul>
+                <li data-checkbox="politique.transparence.dons">Publier les montants reçus, par donateur physique ou moral, au fil de leur réception, en anonymisant le donateur (e.g. numéro matricule). Ces données doivent de toute façon déjà être collectées, pour le compte de campagne à remettre après l'élection.</li>
+                <li data-checkbox="politique.transparence.donateurs">Demander, à tous les donateurs de <a href="https://www.service-public.fr/particuliers/vosdroits/F427">plus de 150€</a>, s'il acceptent une levée de leur anonymat et dans ce cas, publier leur identité (nom, prénom, commune). En cas d'engagement d'un tel montant, l'engagement politique peut souvent ne pas être spécialement secret (e.g. les membres physiques de votre liste ou d'associations proches considéreront leur soutien comme étant de notoriété publique donc ne justifiant de s'opposer à la publication de telles données, les personnes morales autorisées aux dons n'étant que les partis politiques n'ont pas lieu de refuser la publication de leur soutien).</li>
+                <li data-checkbox="politique.transparence.interets"><a href="https://www.legifrance.gouv.fr/affichTexteArticle.do?idArticle=JORFARTI000030423026&cidTexte=JORFTEXT000030423022">Prévenir dès maintenant </a>, pour ne pas nuire à leur candidature, des risques de <a href="https://www.hatvp.fr/la-haute-autorite/la-deontologie-des-responsables-publics/prevention-des-conflits-dinterets/">conflits d'intérêts</a>, tels que les membres ou proches des membres de votre liste qui dépendent d'autorisations ou de subventions municipales ou intercommunales, ainsi que des mesures prises en conséquence (e.g. démission du poste en possible conflit d'intérêts en cas d'élection au conseil municipal).</li>
+            </ul>
+            <p><label for="politique.transparence.site">En cas de réponse affirmative à une ou plusieurs de ces questions de transparence, merci d'indiquer l'adresse du site web de publication:</label></p>
+            <p><input id="politique.transparence.site" type="url" size="60" /></p>
+
+            <h3>Audit de passation de fonctions</h3>
+            <p>Lors du dernier changement politique au département, le nouveau président a fait <a href="https://actu.fr/societe/alain-cadec-la-situation-du-departement-est-grave-2_7393994.html">réaliser un audit financier</a>. Cela peut être utile pour prendre en compte l'intégralité des problématiques, voire signaler à la justice les manquements à leurs responsabilités de la précédente équipe gouvernante. Votre liste souhaite-t'elle effectuer des audits de la mairie sortante, sur les sujets suivants?</p>
+            <ul>
+                <li data-checkbox="politique.audit.gestion">Bon usage des deniers publics, tels que rédaction correcte des cahiers des charges (e.g. au sujet des larges fissures visibles dans les sols, côté nord ou sud, du pôle d'échange multimodal).</li>
+                <li data-checkbox="politique.audit.legislation" id="trottoir">Respect des obligations légale de sécurité (e.g. <a href="https://www.letelegramme.fr/cotes-darmor/saint-brieuc/a-saint-brieuc-la-voie-verte-du-boulevard-charner-fait-grincer-velo-utile-21-02-2020-12509163.php">non-installation d'un trottoir en centre-ville</a> alors qu'<a href="http://voiriepourtous.cerema.fr/IMG/pdf/VoieVerte-MilieuUrbain-certu_cle572eaf.pdf">une voie verte ne peut être considérée comme un trottoir</a>).</li>
+            </ul>
+
+            <h3>Démocratie locale</h3>
+            <p>La relation entre les citoyens et les politiques étant parfois difficile, il est envisagé régulièrement de procéder à des réformes de démocratie locale. Une mairie peut tout à fait pratiquer de telles réformes sur la base du volontariat. Que proposez-vous?</p>
+
+            <ul>
+                <li data-checkbox="politique.democratie.existant">Les outils existants, tels que les associations et collectifs, permettent déjà aux citoyens de se faire entendre et que l'écoute ainsi apportée aux requêtes assure un niveau suffisant de démocratie.</li>
+                <li data-checkbox="politique.democratie.petition">La mairie ou l'intercommunalité fournira une réponse écrite, publique et strictement motivée point par point à toute pétition sur un sujet relevant de son domaine de compétence et recueillant au moins cent signatures (car cela signifie que le sujet est d'intérêt local).</li>
+                <li data-checkbox="politique.democratie.sort">À chaque potentielle décision, il faudra créer un conseil ad-hoc de quartier ou de commune, selon le périmètre d'impact, constitué d'un trentaine d'habitants tirés au sort et lui soumettre à l'avance le projet de décision municipale pour qu'il puisse faire remonter ses remarques, auxquelles la mairie répondra avant toute décision définitive. Cela permettra d'avoir des informations issue de l'expérience locale.</li>
+                <li data-checkbox="politique.democratie.referendum">À chaque projet d'importance, dépassant dix millions d'euros, il faudra organiser un référendum local pour impliquer tous les habitants et non seulement ceux motivés par l'enquête publique préalable. Cela leur permettra d'exprimer leurs choix sur un engagement important pour toute la commune et de reprendre à leur compte le projet.</li>
+                <li data-checkbox="politique.democratie.revocation">Pour éviter les dérives d'une municipalité qui deviendrait déconnectée des habitants, il faut introduire une <a href="https://books.google.fr/books?id=fbkLCwAAQBAJ&pg=PT156">procédure de révocation</a> (ou ostracisme, recall). En cas d'élection de notre liste, celle-ci s'engage à convoquer un référendum local sur le sujet de sa propre révocation, <a href="https://fr.wikipedia.org/wiki/R%C3%A9f%C3%A9rendum_r%C3%A9vocatoire">en cas de pétition rassemblant 10% du corps électoral</a>. Si la révocation est alors votée, nos membres démissionneront en bloc, provoquant donc une nouvelle élection municipale.</li>
+                <li data-checkbox="politique.democratie.revoyure">Pratiquer une clause de revoyure chaque année, en proposant chaque année un référendum révocatoire et en respectant le résultat du référendum par une démission collective de nos élus en cas de tel résultat au référendum.</li>
+            </ul>
+
+        </section>
+
+        <section>
+            <h2>Faisons connaissance avec votre liste</h2>
+
+            <p>Certains électeurs désirent que leurs représentants soit à leur image car ils veulent réaliser rapidement leurs idées, tandis que d'autres considèrent qu'il y aura toujours des différences avec leurs idées propres et préfèrent des représentants capables de comprendre les idées différentes (car ils ne seront jamais à leur image).</p>
+            <p>Les questions précédentes ont permis aux électeurs de voir la proximité de leurs idées avec celles de votre liste, mais aussi de réfléchir aux motivations des autres idées. Les questions suivantes leur serviront à examiner le caractère plutôt unifié politiquement et directif ou consensuel et orienté local de votre liste.</p>
+            <p>Ces questions seront volontairement imprécises (et souvent transverses aux partis politiques) car n'entrant pas clairement dans le mandat municipal (si vous êtes élu, vous n'aurez pas à agir directement dessus). Ce sondage est cependant fondamentalement aussi à valeur locale car sur chacun de ces sujets, de nombreux maires se sont prononcés ouvertement et ont voulu agir que ce soit en opposition (e.g. affichage ou arrêté municipal) ou en soutien (e.g. expérimentation locale d'une future loi).</p>
+            <p>Pour éviter que certains lecteurs ne montent trop en épingle l'opinion personnelle d'une tête de liste et tiennent compte de la multiplicité des personnes de la liste, les questions prendront la forme d'un sondage sur le cœur de la liste de candidats. Celui-ci est défini comme les candidats obligatoirement communs à la liste municipale et à la liste intercommunale, c'est à dire <a href="https://www.interieur.gouv.fr/content/download/119941/962081/file/guide-municipales2020-+-de-1000-habitants.pdf#page=18">le premier quart de votre liste</a> (les dix premiers, tête de liste incluse).</p>
+            <p>Pour chaque question, il vous est demandé de noter pour chaque réponse (Totalement contre, Plutôt contre, Plutôt d'accord, Totalement pour, Ne se prononce pas), le nombre de tels répondants à la question parmi les dix premiers de la liste. La somme des nombres associées aux réponses, sera donc, pour chaque question, toujours égal à dix. Nous avons volontairement limité l'éventail des questions à trois questions sur chacun des quatre grands thèmes identifiés.</p>
+
+            <h3>Technologie</h3>
+            <p data-survey="sondage.compteurs">Êtes vous favorable à l'installation des compteurs connectés Linky et Gazpar?</p>
+            <p data-survey="sondage.mobile">Êtes vous favorable à l'installation de nouvelles antennes-relais de téléphonie mobile?</p>
+            <p data-survey="sondage.sociaux">Êtes vous favorable au contrôle des réseaux sociaux (Loi Avia, fake news)?</p>
+
+            <h3>Frontières</h3>
+            <p data-survey="sondage.reunification">Soutenez-vous la réunification de la Bretagne (Loire-Atlantique)?</p>
+            <p data-survey="sondage.independance">Soutenez-vous l'indépendance de la Bretagne?</p>
+            <p data-survey="sondage.migrants">Êtes-vous favorable à l'accueil des migrants en France?</p>
+
+            <h3>Société</h3>
+            <p data-survey="sondage.societal">Êtes vous favorable à la légalisation du mariage pour tous et de la PMA pour les lesbiennes et femmes seules?</p>
+            <p data-survey="sondage.cannabis">Êtes vous favorable à la légalisation du cannabis récréatif?</p>
+            <p data-survey="sondage.euthanasie">Êtes vous favorable à la légalisation de l'euthanasie?</p>
+
+            <h3>Économie</h3>
+            <p data-survey="sondage.pesticides">Soutenez-vous l'interdiction des pesticides à moins de 150 mètres des habitations?</p>
+            <p data-survey="sondage.giletsjaunes">Approuvez-vous le mouvement des gilets jaunes?</p>
+            <p data-survey="sondage.retraites">Approuvez-vous la réforme des retraites (actuelle)?</p>
+
+        </section>
+
+        <section>
+            <h2>Remerciements</h2>
+
+            <p>Pour finir, nous vous remercions encore de vos réponses à ce questionnaire pour permettre la meilleure information possible des électeurs. <strong>N'oubliez surtout pas de sauvegarder les réponses (cf. autre volet de la fenêtre) pour nous les transmettre par mail.</strong> Si vous désirez que des remarques textuelles (sur le questionnaire ou vos réponses) soient publiées à côté de vos réponses, merci de préciser les sections de votre mail à publier.</p>
+            <p>Nous en sommes au premier essai de notre questionnaire pour retisser le lien entre la politique et les citoyens, par une meilleure compréhension réciproque. Nous vous prions de nous excuser pour les nombreux manques relatifs à des points essentiels de vos programmes. Il nous a semblé important de faire un questionnaire complet mais relativement bref, car les tableaux comparatifs doivent être lisibles rapidement. Ce questionnaire n'est pas là pour décrire l'intégralité de votre programme mais pour faire la passerelle entre des électeurs plutôt las de la politique et le programme que vous proposez (dont le lien vous a été demandé pour justement compléter l'information des électeurs intéressés).</p>
+            <p>Nous terminerons en rappelant que notre questionnaire a pour but de retisser le lien entre politiques et citoyens, en rendant les visions de vos programmes plus accessibles. Cependant, aider à la présentation est une chose, mais vos programmes n'<a href="https://www.saintbrieuc-armor-agglo.fr/fileadmin/AVIS_PDU.pdf#page=40">auront de sens</a> que s'ils sont faits pour être réalisés et non seulement pour que vous soyez élus (dupant ainsi les électeurs). Il est donc essentiel qu'ils soient aussi éducatifs en incitant les électeurs à comprendre et accepter les nécessaires évolutions.</p>
+            <p>En effet, le rôle du politique est de créer du lien social et non de satisfaire la fraction des électeurs l'ayant choisi (clientélisme). L'électeur averti ayant souvent appris qu'une promesse n'engage que celui qui y croit, comprendra immédiatement les implications lorsqu'un candidat lui promet de violer le contexte normatif légal en favorisant un groupe d'électeurs. Ainsi, le coût supplémentaire de la mise aux normes qui suivra, lorsque le maire devra rendre des comptes à l'État, sera inacceptable pour les victimes de l'illégalité. Ce coût se trouvera être supporté par le groupe, ayant cru à la promesse mensongère, qui sera finalement sanctionné pour sa crédulité (e.g. le coût de mise aux normes des trottoirs illégaux sera supporté par les automobilistes, via une hausse du prix des parkings).</p>
+            <p>De même, la politique se vantant de pédagogie et ânnonant ce qui a été décidé, jusqu'à épuisement de l'auditeur, ne cessera de créer plus de distance et de nouveaux ressentiments entre citoyens et politiques. La pédagogie politique doit être logique et convaincante en montrant les avantages et les défauts qu'aura un changement, ainsi que les motivations le requérant: si elle ne peut répondre à une question d'un électeur et choisit de l'ignorer, comment pourrait-elle le convaincre du bien-fondé de sa position et donc faire l'essence même de la politique, c'est-à-dire créer pacifiquement du consensus. Voilà pourquoi chaque proposition de notre questionnaire est motivée, car elle représente des briochins à convaincre sans les mépriser.</p>
+
+        </section>
+
+    </article>
+    <footer>
+        <h1>Vos réponses</h1>
+        <hr />
+        <p><a id="download" download="responses.json">Sauvegarder vos réponses dans un fichier</a></p>
+        <hr />
+        <p><input id="importer" type="file" accept=".json" /><label for="importer">Importer les réponses depuis un fichier précédemment sauvegardé</label></p>
+        <hr />
+        <details>
+            <summary>Vos réponses (format de données JSON)</summary>
+            <pre id="response"></pre>
+        </details>
+    </footer>
+
+</body>
+
+</html>
